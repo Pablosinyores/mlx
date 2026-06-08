@@ -34,7 +34,7 @@ namespace mlx::core::cu {
 
 using namespace cute;
 
-template <int GroupSize, typename Element, typename Quant, typename CtaTiler>
+template <typename Element, typename Quant, typename CtaTiler>
 CUTLASS_HOST_DEVICE auto make_qmm_sm90_kernel() {
   constexpr int AlignmentA = 128 / sizeof_bits<Element>::value;
   constexpr int AlignmentB = 128 / sizeof_bits<Quant>::value;
@@ -84,12 +84,8 @@ CUTLASS_HOST_DEVICE auto make_qmm_sm90_kernel() {
       GemmUniversal<Shape<int, int, int, int>, Mainloop, Epilogue>{};
 }
 
-template <
-    int GroupSize = 64,
-    typename Element = float,
-    typename Quant = uint8_t,
-    typename CtaTiler = Shape<_128, _256, _64>>
+template <typename Element, typename Quant, typename CtaTiler>
 using qmm_sm90_kernel_t =
-    decltype(make_qmm_sm90_kernel<GroupSize, Element, Quant, CtaTiler>());
+    decltype(make_qmm_sm90_kernel<Element, Quant, CtaTiler>());
 
 } // namespace mlx::core::cu

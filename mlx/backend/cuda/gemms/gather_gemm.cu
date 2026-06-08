@@ -22,20 +22,6 @@ inline auto make_cta_tiler(int m) {
 
 } // namespace
 
-template <typename F>
-inline void dispatch_element_types(Dtype dtype, const char* tag, F&& f) {
-  if (dtype == float32) {
-    f.template operator()<float>();
-  } else if (dtype == float16) {
-    f.template operator()<cutlass::half_t>();
-  } else if (dtype == bfloat16) {
-    f.template operator()<cutlass::bfloat16_t>();
-  } else {
-    throw std::invalid_argument(
-        fmt::format("{} Unsupported dtype: {}.", tag, dtype_to_string(dtype)));
-  }
-}
-
 void gather_mm(
     bool a_transposed,
     bool b_transposed,
@@ -50,7 +36,8 @@ void gather_mm(
   int k = a.shape(-1);
   int l = out.size() / (m * n);
 
-  bool aligned = (k % 8 == 0);
+  bool aligned =
+      ((a_transposed ? k : m) % 8 == 0) && ((b_transposed ? n : k) % 8 == 0);
   bool sm80 = encoder.device().compute_capability_major() >= 8;
   auto cta_tiler = make_cta_tiler(m);
 

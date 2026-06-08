@@ -30,10 +30,9 @@ template <typename F>
 inline void dispatch_element_types(Dtype dtype, const char* tag, F&& f) {
   if (dtype == float32) {
     f.template operator()<float>();
-  } else if (dtype == float16) {
+  } else if (dtype == float16 || dtype == bfloat16) {
+    // Note that this is only used for computing launch args.
     f.template operator()<cutlass::half_t>();
-  } else if (dtype == bfloat16) {
-    f.template operator()<cutlass::bfloat16_t>();
   } else {
     throw std::invalid_argument(
         fmt::format("{} Unsupported dtype: {}.", tag, dtype_to_string(dtype)));
@@ -55,24 +54,8 @@ inline void dispatch_quant_types(int bits, const char* tag, F&& f) {
 }
 
 template <typename F>
-inline void dispatch_groups(int group_size, const char* tag, F&& f) {
-  if (group_size == 64) {
-    f.template operator()<64>();
-  } else if (group_size == 128) {
-    f.template operator()<128>();
-  } else {
-    throw std::invalid_argument(
-        fmt::format("{} Group size {} is not supported.", tag, group_size));
-  }
-}
-
-template <typename F>
 inline void dispatch_tile(int m, F&& f) {
-  if (m <= 16) {
-    f.template operator()<16>();
-  } else if (m <= 32) {
-    f.template operator()<32>();
-  } else if (m <= 64) {
+  if (m <= 64) {
     f.template operator()<64>();
   } else if (m <= 128) {
     f.template operator()<128>();
@@ -92,18 +75,13 @@ inline void dispatch_gemm(
   dispatch_element_types(x.dtype(), tag, [&]<typename Element>() {
     dispatch_tile(n, [&]<int TileN>() {
       dispatch_quant_types(bits, tag, [&]<typename Quant>() {
-        dispatch_groups(group_size, tag, [&]<int GroupSize>() {
-          auto cta_tiler = make_shape(
-              Int<128>{},
-              Int<TileN>{},
-              Int<std::max(64, 128 * 8 / sizeof_bits_v<Element>)>{});
-          auto gemm = cu::make_qmm_sm90_kernel<
-              GroupSize,
-              Element,
-              Quant,
-              decltype(cta_tiler)>();
-          f(cta_tiler, gemm);
-        });
+        auto cta_tiler = make_shape(
+            Int<128>{},
+            Int<TileN>{},
+            Int<std::max(64, 128 * 8 / sizeof_bits_v<Element>)>{});
+        auto gemm =
+            cu::make_qmm_sm90_kernel<Element, Quant, decltype(cta_tiler)>();
+        f(cta_tiler, gemm);
       });
     });
   });
@@ -140,16 +118,15 @@ void qmm_sm90(
   dispatch_gemm(x, n, bits, group_size, tag, [&](auto cta_tiler, auto gemm) {
     // JIT compilation.
     std::string module_name = fmt::format(
-        "qmm_sm90_tn_{}_n{}_b{}_g{}_affine",
+        "qmm_sm90_tn_{}_n{}_k{}_b{}_affine",
         dtype_to_string(x.dtype()),
         int(size<1>(cta_tiler)),
-        bits,
-        group_size);
+        int(size<2>(cta_tiler)),
+        bits);
 
     auto [ctype_x, ctype_q, ctype_s] = get_qmm_cutlass_types(x, bits);
     std::string kernel_name = fmt::format(
-        "cutlass::device_kernel<mlx::core::cu::qmm_sm90_kernel_t<{}, {}, {}, {}>>",
-        group_size,
+        "cutlass::device_kernel<mlx::core::cu::qmm_sm90_kernel_t<{}, {}, {}>>",
         ctype_x,
         ctype_q,
         cta_tiler_to_string(cta_tiler));
